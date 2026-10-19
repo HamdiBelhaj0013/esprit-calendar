@@ -37,6 +37,18 @@ def _debug(page, name: str):
         pass
 
 
+def _check_blocked(page):
+    """ESPRIT's firewall answers datacenter IPs (GitHub Actions, VPS…) with a 'Web Page Blocked!' page."""
+    try:
+        body = page.inner_text("body", timeout=5000)
+    except Exception:
+        return
+    if "Web Page Blocked" in body or "Attack ID" in body:
+        _debug(page, "blocked")
+        raise RuntimeError("ESPRIT's firewall blocked this connection. Run the script from your own network "
+                           "(your PC), not from a server. See debug/blocked.png")
+
+
 def _login_if_needed(page, user: str, password: str):
     pw = page.locator(SEL_PASS).first
     try:
@@ -64,9 +76,11 @@ def _download(page, out: Path) -> Path:
 
 
 def fetch_pdfs(user: str, password: str, out_dir: str | Path = "out", weeks: int = 1,
-               today: date | None = None, headless: bool = True) -> list[Path]:
+               today: date | None = None, headless: bool | None = None) -> list[Path]:
     """Download `weeks` PDFs starting from the upcoming week (skips a week that is already over)."""
     today = today or date.today()
+    if headless is None:
+        headless = os.getenv("HEADLESS", "1") != "0"
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
@@ -78,9 +92,11 @@ def fetch_pdfs(user: str, password: str, out_dir: str | Path = "out", weeks: int
         page = ctx.new_page()
         try:
             page.goto(EDT_URL, wait_until="networkidle", timeout=60000)
+            _check_blocked(page)
             _login_if_needed(page, user, password)
             if "/online/edt" not in page.url:
                 page.goto(EDT_URL, wait_until="networkidle", timeout=60000)
+                _check_blocked(page)
 
             pdf = _download(page, out_dir / "edt_tmp.pdf")
             parsed = parse_pdf(pdf)
@@ -113,5 +129,8 @@ if __name__ == "__main__":
     import sys
 
     nums = [int(a) for a in sys.argv[1:] if a.isdigit()]
+    from main import load_env
+
+    load_env()
     print(fetch_pdfs(os.environ["ESPRIT_USERNAME"], os.environ["ESPRIT_PASSWORD"],
-                     weeks=nums[0] if nums else 1, headless="--show" not in sys.argv))
+                     weeks=nums[0] if nums else 1, headless=False if "--show" in sys.argv else None))

@@ -19,6 +19,22 @@ from pathlib import Path
 from esprit_edt import parse_pdf, to_ics
 
 JOURS = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
+HERE = Path(__file__).resolve().parent
+
+
+def load_env(path: Path = HERE / ".env"):
+    """Read KEY=value lines from .env (used when running on your PC). Real env vars win."""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    sa = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    if sa and not sa.lstrip().startswith("{") and not Path(sa).is_absolute():
+        os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"] = str(HERE / sa)  # key file next to the script
 
 
 def send_mail(weeks, pdfs: list[Path], ics: Path, reports: list[dict]):
@@ -54,10 +70,11 @@ def send_mail(weeks, pdfs: list[Path], ics: Path, reports: list[dict]):
 
 
 def main():
+    load_env()
     ap = argparse.ArgumentParser()
     ap.add_argument("--pdf", nargs="*", help="use local PDF(s) instead of downloading from the portal")
     ap.add_argument("--weeks", type=int, default=int(os.getenv("WEEKS", "1")))
-    ap.add_argument("--out", default="out")
+    ap.add_argument("--out", default=str(HERE / "out"))
     ap.add_argument("--no-sync", action="store_true")
     ap.add_argument("--no-mail", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="show calendar changes without applying them")

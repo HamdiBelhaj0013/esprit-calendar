@@ -1,15 +1,10 @@
-name: ESPRIT timetable → Google Calendar
+# The weekly download runs on your PC (ESPRIT's firewall blocks GitHub's servers).
+# This workflow is the fallback: upload a PDF into inbox/ (GitHub website or app → Add file → Upload)
+# and it syncs Google Calendar + emails you, without touching the ESPRIT portal.
+name: ESPRIT timetable → Google Calendar (inbox upload)
 
 on:
-  schedule:
-    - cron: "0 19 * * 0"        # every Sunday 20:00 Tunis time (19:00 UTC, Tunisia has no DST)
-    # - cron: "0 19 * * 3"      # optional: also Wednesday evening, to catch mid-week changes
-  workflow_dispatch:            # "Run workflow" button for manual runs / first test
-    inputs:
-      weeks:
-        description: "How many weeks to fetch"
-        default: "1"
-  push:                         # fallback: upload a PDF into inbox/ and it gets synced
+  push:
     paths: ["inbox/*.pdf"]
 
 concurrency: edt-sync
@@ -17,7 +12,7 @@ concurrency: edt-sync
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,29 +24,21 @@ jobs:
           cache: pip
 
       - name: Install
-        run: |
-          pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
+        run: pip install -r requirements.txt
 
       - name: Sync
         env:
-          ESPRIT_USERNAME: ${{ secrets.ESPRIT_USERNAME }}
-          ESPRIT_PASSWORD: ${{ secrets.ESPRIT_PASSWORD }}
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_CALENDAR_ID: ${{ secrets.GOOGLE_CALENDAR_ID }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
-          WEEKS: ${{ github.event.inputs.weeks || '1' }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            PDFS=$(git diff --name-only --diff-filter=AM HEAD~1 HEAD -- 'inbox/*.pdf')
-            python main.py --pdf $PDFS
-          else
-            python main.py
-          fi
+          PDFS=$(git diff --name-only --diff-filter=AM HEAD~1 HEAD -- 'inbox/*.pdf')
+          [ -n "$PDFS" ] || { echo "No new PDF in inbox/"; exit 0; }
+          python main.py --pdf $PDFS
 
-      - name: Keep PDF, .ics and debug screenshots
+      - name: Keep PDF and .ics
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -59,6 +46,5 @@ jobs:
           path: |
             out/*.pdf
             out/*.ics
-            debug/
           if-no-files-found: ignore
           retention-days: 30

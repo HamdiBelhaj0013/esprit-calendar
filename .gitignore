@@ -1,5 +1,7 @@
 out/
 debug/
+logs/
 __pycache__/
 *.json
 .env
+.idea/
