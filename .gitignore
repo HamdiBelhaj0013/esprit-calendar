@@ -1,0 +1,5 @@
+out/
+debug/
+__pycache__/
+*.json
+.env
