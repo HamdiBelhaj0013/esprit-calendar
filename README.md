@@ -2,7 +2,7 @@
 
 Every Sunday at 20:00, a scheduled task **on your PC**:
 
-1. logs into **arp.esprit.tn** with a headless browser and clicks **Télécharger PDF** for the coming week,
+1. opens **arp.esprit.tn** in the background with your saved session and clicks **Télécharger PDF** for the coming week,
 2. parses the PDF (module, teacher, room, times, Cours / Épreuve / Événement),
 3. syncs a dedicated **Google Calendar**: new sessions are added, changed ones updated, cancelled ones removed,
 4. **emails you the new PDF** + an `.ics` file, with a summary of what changed.
@@ -13,6 +13,10 @@ Exams (Épreuve) show in red, events (Événement) in yellow. Events you add you
 > **Why on your PC and not on GitHub?** ESPRIT's firewall blocks datacenter IPs ("Web Page Blocked!"),
 > so the download has to come from your own network, like your normal browser.
 > GitHub is still used as a fallback: drop a PDF into `inbox/` and it syncs (see below).
+>
+> **Login:** the portal has a reCAPTCHA, so the script never logs in by itself. You log in once with
+> `login.bat` (a browser window opens, you tick the captcha); the session is saved in `browser-profile/`
+> and reused every week. When ESPRIT expires it, you get an email "reconnecte-toi" → double-click `login.bat` again.
 
 ---
 
@@ -35,19 +39,16 @@ python -m playwright install chromium
 copy .env.example .env
 ```
 - Put the service account key file in the folder and name it `service-account.json`.
-- Open `.env` and fill in your ESPRIT login, calendar ID, Gmail and app password.
+- Open `.env` and fill in the calendar ID, Gmail and app password (and your ESPRIT login to pre-fill the form).
 
-`.env` and `*.json` are git-ignored, so your passwords and key never get pushed.
+`.env`, `*.json` and `browser-profile/` are git-ignored, so your passwords, key and session never get pushed.
 
-### 3. Test
-```bat
-python main.py --dry-run --no-mail
-```
-It should print the week's sessions and `Calendar …: +8 ~0 -0` without changing anything. Then the real run:
-```bat
-python main.py
-```
-→ events appear in **ESPRIT 4CCE5** and you get the email.
+### 3. Log in once + first sync
+Double-click **`login.bat`**. A browser window opens on the ESPRIT login page (pre-filled):
+tick **Je ne suis pas un robot**, click **Se connecter**. The window closes by itself, the session is saved,
+and the first sync runs → events appear in **ESPRIT 4CCE5** and you get the email.
+
+To check without changing anything: `python main.py --dry-run --no-mail`.
 
 ### 4. Schedule it
 ```powershell
@@ -78,7 +79,8 @@ The ESPRIT username/password secrets are not needed on GitHub any more.
 | Problem | Fix |
 |---|---|
 | `ESPRIT's firewall blocked this connection` on your PC | Add `HEADLESS=0` to `.env` (a visible Chrome window is used) |
-| `Login did not complete` | Wrong credentials, or the login page changed → `python fetch_edt.py --show` to watch it, see `debug/` |
+| Email "reconnecte-toi" / `ESPRIT session expired` | Double-click `login.bat` and log in again |
+| `Login not completed in time` | You have 5 minutes in the login window; run `login.bat` again |
 | Timeout waiting for `charger PDF` | Look at `debug/error.png`; selectors can be overridden in `.env`: `SEL_USER`, `SEL_PASS`, `SEL_SUBMIT`, `SEL_PDF`, `SEL_NEXT` |
 | Google `404 Not Found` | Wrong calendar ID, or the calendar isn't shared with the service account |
 | Google `403` | Calendar API not enabled, or shared with read-only permission |
@@ -91,7 +93,8 @@ python main.py --weeks 2                         :: this week + next week
 python main.py --pdf emploi.pdf                  :: use a PDF you already have
 python main.py --pdf emploi.pdf --no-sync --no-mail   :: just make out\EDT_4CCE5.ics
 python main.py --dry-run --no-mail               :: show calendar changes without applying them
-python fetch_edt.py --show                       :: watch the browser log in
+python fetch_edt.py --login                      :: log in once (same as login.bat, without the sync)
+python fetch_edt.py --show                       :: test a download in a visible window
 ```
 
 ## Files
@@ -99,5 +102,6 @@ python fetch_edt.py --show                       :: watch the browser log in
 - `fetch_edt.py` – portal login + PDF download (Playwright)
 - `gcal_sync.py` – Google Calendar sync (add / update / remove, only its own events)
 - `main.py` – runs everything + sends the email (reads `.env`)
+- `login.bat` – log in to ESPRIT once (captcha), then sync
 - `run_edt.bat`, `install_task.ps1` – Windows scheduled task
 - `.github/workflows/weekly-edt.yml` – fallback: sync a PDF uploaded to `inbox/`

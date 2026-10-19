@@ -5,8 +5,9 @@
   python main.py --pdf my.pdf --no-sync --no-mail   # just produce out/*.ics (local test)
   python main.py --weeks 2               # also grab the following week
 
-Env vars (GitHub secrets): ESPRIT_USERNAME, ESPRIT_PASSWORD, GOOGLE_SERVICE_ACCOUNT_JSON,
-GOOGLE_CALENDAR_ID, SMTP_USER, SMTP_APP_PASSWORD, MAIL_TO (optional, defaults to SMTP_USER).
+Settings come from .env (on your PC) or env vars: GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_CALENDAR_ID,
+SMTP_USER, SMTP_APP_PASSWORD, MAIL_TO (optional), ESPRIT_USERNAME/ESPRIT_PASSWORD (only to pre-fill login).
+Logging in to the portal is done once by you: login.bat (python fetch_edt.py --login).
 """
 from __future__ import annotations
 
@@ -63,10 +64,30 @@ def send_mail(weeks, pdfs: list[Path], ics: Path, reports: list[dict]):
         msg.add_attachment(f.read_bytes(), maintype="application", subtype="pdf", filename=f.name)
     msg.add_attachment(ics.read_bytes(), maintype="text", subtype="calendar", filename=ics.name)
 
-    with smtplib.SMTP_SSL(os.getenv("SMTP_HOST", "smtp.gmail.com"), 465) as s:
-        s.login(user, pwd)
-        s.send_message(msg)
+    _smtp_send(msg)
     print(f"Mail sent to {to}")
+
+
+def _smtp_send(msg: EmailMessage):
+    with smtplib.SMTP_SSL(os.getenv("SMTP_HOST", "smtp.gmail.com"), 465) as s:
+        s.login(os.environ["SMTP_USER"], os.environ["SMTP_APP_PASSWORD"])
+        s.send_message(msg)
+
+
+def send_session_expired_mail():
+    """Tell the user to log in again (the portal has a captcha, so this step is manual)."""
+    if not (os.getenv("SMTP_USER") and os.getenv("SMTP_APP_PASSWORD")):
+        return
+    msg = EmailMessage()
+    msg["Subject"] = "🔑 EDT ESPRIT — reconnecte-toi (session expirée)"
+    msg["From"], msg["To"] = os.environ["SMTP_USER"], os.getenv("MAIL_TO", os.environ["SMTP_USER"])
+    msg.set_content(
+        "La session ESPRIT enregistrée a expiré, l'emploi du temps n'a pas pu être téléchargé.\n\n"
+        "Sur ton PC : double-clique sur login.bat dans le dossier esprit-calendar,\n"
+        "connecte-toi (captcha), et la synchronisation se relance automatiquement.\n"
+    )
+    _smtp_send(msg)
+    print("Session-expired mail sent")
 
 
 def main():
@@ -86,8 +107,14 @@ def main():
     if args.pdf:
         pdfs = [Path(p) for p in args.pdf]
     else:
-        from fetch_edt import fetch_pdfs
-        pdfs = fetch_pdfs(os.environ["ESPRIT_USERNAME"], os.environ["ESPRIT_PASSWORD"], out, weeks=args.weeks)
+        from fetch_edt import SessionExpired, fetch_pdfs
+        try:
+            pdfs = fetch_pdfs(out, weeks=args.weeks)
+        except SessionExpired as e:
+            print(f"❌ {e}")
+            if not args.no_mail:
+                send_session_expired_mail()
+            raise SystemExit(2)
 
     weeks = [wk for p in pdfs for wk in parse_pdf(p)]
     if not weeks:

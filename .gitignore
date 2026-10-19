@@ -1,6 +1,7 @@
 out/
 debug/
 logs/
+browser-profile/
 __pycache__/
 *.json
 .env
