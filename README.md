@@ -1,28 +1,25 @@
-# ESPRIT timetable → Google Calendar (every Sunday)
+# ESPRIT timetable → Google Calendar
 
-Every Sunday at 20:00, a scheduled task **on your PC**:
+You click **Télécharger PDF** on arp.esprit.tn in your normal browser. Within ~15 seconds a small background
+watcher on your PC notices `emploi_du_temps_….pdf` in your Downloads folder and:
 
-1. opens **arp.esprit.tn** in the background with your saved session and clicks **Télécharger PDF** for the coming week,
-2. parses the PDF (module, teacher, room, times, Cours / Épreuve / Événement),
-3. syncs a dedicated **Google Calendar**: new sessions are added, changed ones updated, cancelled ones removed,
-4. **emails you the new PDF** + an `.ics` file, with a summary of what changed.
+1. reads the PDF (module, teacher, room, times, Cours / Épreuve / Événement),
+2. syncs the **ESPRIT 4CCE5** Google Calendar: new sessions added, changed ones updated, cancelled ones removed,
+3. **emails you the PDF** + an `.ics` file, with a summary of what changed,
+4. moves the PDF to `archive\EDT_4CCE5_<week>.pdf`.
 
-If the PC is off on Sunday evening, it runs as soon as you turn it on.
 Exams (Épreuve) show in red, events (Événement) in yellow. Events you add yourself to the calendar are never touched.
+Downloading the same week again is safe: only real changes are applied.
 
-> **Why on your PC and not on GitHub?** ESPRIT's firewall blocks datacenter IPs ("Web Page Blocked!"),
-> so the download has to come from your own network, like your normal browser.
-> GitHub is still used as a fallback: drop a PDF into `inbox/` and it syncs (see below).
->
-> **Login:** the portal has a reCAPTCHA, so the script never logs in by itself. You log in once with
-> `login.bat` (a browser window opens, you tick the captcha); the session is saved in `browser-profile/`
-> and reused every week. When ESPRIT expires it, you get an email "reconnecte-toi" → double-click `login.bat` again.
+> **Why not fully automatic?** ESPRIT's portal blocks automated access (firewall on servers, reCAPTCHA on
+> login, and the timetable doesn't load in automated browsers). So no script touches the portal: you
+> download the PDF yourself (one click), everything after that is automatic.
 
 ---
 
-## Setup
+## Setup (once)
 
-### 1. Google side (done once)
+### 1. Google side
 - **Service account:** Google Cloud console → project → enable **Google Calendar API** →
   IAM & Admin → Service Accounts → create → Keys → Add key → JSON.
 - **Calendar:** Google Calendar → Autres agendas **+** → Créer un agenda `ESPRIT 4CCE5` →
@@ -30,78 +27,77 @@ Exams (Épreuve) show in red, events (Événement) in yellow. Events you add you
   copy **ID de l'agenda** (`…@group.calendar.google.com`).
 - **Gmail app password:** https://myaccount.google.com/apppasswords (needs 2-Step Verification).
 
-### 2. On your PC (Windows)
-In the project folder:
-```bat
+### 2. On your PC (Windows, PowerShell in the project folder)
+```powershell
 git pull
 pip install -r requirements.txt
-python -m playwright install chromium
-copy .env.example .env
+copy .env.example .env      # skip if you already have one
+notepad .env
 ```
-- Put the service account key file in the folder and name it `service-account.json`.
-- Open `.env` and fill in the calendar ID, Gmail and app password (and your ESPRIT login to pre-fill the form).
+- Put the service account key in the folder as `service-account.json`.
+- In `.env`: calendar ID, Gmail address, app password.
 
-`.env`, `*.json` and `browser-profile/` are git-ignored, so your passwords, key and session never get pushed.
+`.env`, `*.json` and `archive/` are git-ignored: your key, passwords and PDFs never get pushed.
 
-### 3. Log in once + first sync
-Double-click **`login.bat`**. A browser window opens on the ESPRIT login page (pre-filled):
-tick **Je ne suis pas un robot**, click **Se connecter**. The window closes by itself, the session is saved,
-and the first sync runs → events appear in **ESPRIT 4CCE5** and you get the email.
-
-To check without changing anything: `python main.py --dry-run --no-mail`.
-
-### 4. Schedule it
+### 3. Start the watcher
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\install_task.ps1
 ```
-If you get "Access denied", run that from PowerShell **as administrator**.
-Check it in **Planificateur de tâches** (Task Scheduler) → *ESPRIT EDT sync*. Each run writes `logs\last_run.log`.
+It starts now (hidden, no window) and at every Windows logon. If you get "Access denied", run it from PowerShell as administrator.
+
+### 4. Weekly reminder
+In Google Calendar create a recurring event **"📥 Télécharger l'EDT"** — every Sunday 20:00 — with a notification,
+and put `https://arp.esprit.tn/online/edt` in the description so it's one tap away.
+
+---
+
+## Each week
+Open the portal → **Emploi Du Temps** → **Télécharger PDF**. That's it: calendar + email follow automatically.
+Want next week too? Click **›** on the portal and download again.
+
+**From your phone (PC off):** download the PDF on the phone, then in the GitHub repo **inbox/ → Add file → Upload files** → commit.
+The GitHub Action syncs the calendar and emails you. Repo secrets needed: `GOOGLE_SERVICE_ACCOUNT_JSON` (whole JSON content),
+`GOOGLE_CALENDAR_ID`, `SMTP_USER`, `SMTP_APP_PASSWORD` (+ optional `MAIL_TO`).
 
 ---
 
 ## Apple Calendar
-The Google calendar is the hub; Apple reads it:
-- **iPhone/iPad:** Settings → Apps → Calendar → Calendar Accounts → Add Account → Google. Then open
-  https://calendar.google.com/calendar/syncselect and tick **ESPRIT 4CCE5** (iOS only shows your main calendar until you do this).
+- **iPhone/iPad:** Settings → Apps → Calendar → Calendar Accounts → Add Account → Google, then open
+  https://calendar.google.com/calendar/syncselect and tick **ESPRIT 4CCE5**.
 - **Mac:** System Settings → Internet Accounts → Google → Calendars on.
 
 ---
 
-## Fallback: drop the PDF yourself (works from your phone)
-Download the PDF from the portal, then in the GitHub repo: **inbox/ → Add file → Upload files** → commit.
-The GitHub Action syncs the calendar and emails you. It needs these repo secrets:
-`GOOGLE_SERVICE_ACCOUNT_JSON` (whole JSON content), `GOOGLE_CALENDAR_ID`, `SMTP_USER`, `SMTP_APP_PASSWORD` (+ optional `MAIL_TO`).
-The ESPRIT username/password secrets are not needed on GitHub any more.
-
----
-
 ## Troubleshooting
+Everything the watcher does is in **`logs\watch.log`**.
+
 | Problem | Fix |
 |---|---|
-| `ESPRIT's firewall blocked this connection` on your PC | Add `HEADLESS=0` to `.env` (a visible Chrome window is used) |
-| Email "reconnecte-toi" / `ESPRIT session expired` | Double-click `login.bat` and log in again |
-| `Login not completed in time` | You have 5 minutes in the login window; run `login.bat` again |
-| Timeout waiting for `charger PDF` | Look at `debug/error.png`; selectors can be overridden in `.env`: `SEL_USER`, `SEL_PASS`, `SEL_SUBMIT`, `SEL_PDF`, `SEL_NEXT` |
+| Nothing happens after downloading | Check `logs\watch.log`. Is the file named `emploi_du_temps…pdf` and in the folder shown on the "Watching …" line? If not, set `DOWNLOADS_DIR` / `PDF_PATTERN` in `.env`, then restart the watcher (below) |
+| `ERROR … retrying in 5 min` | No internet or a Google/Gmail problem; it retries by itself |
 | Google `404 Not Found` | Wrong calendar ID, or the calendar isn't shared with the service account |
 | Google `403` | Calendar API not enabled, or shared with read-only permission |
 | SMTP `535` | Use the app password, not your Gmail password |
+| `_not_a_timetable_…` in `archive\` | That PDF matched the name pattern but isn't a timetable; ignored |
+
+Restart the watcher after changing `.env`:
+```powershell
+Stop-ScheduledTask -TaskName "ESPRIT EDT watcher"; Start-ScheduledTask -TaskName "ESPRIT EDT watcher"
+```
+Remove it: `Unregister-ScheduledTask -TaskName "ESPRIT EDT watcher" -Confirm:$false`
 
 ## Commands
-```bat
-python main.py                                   :: full run (portal → calendar → email)
-python main.py --weeks 2                         :: this week + next week
-python main.py --pdf emploi.pdf                  :: use a PDF you already have
-python main.py --pdf emploi.pdf --no-sync --no-mail   :: just make out\EDT_4CCE5.ics
-python main.py --dry-run --no-mail               :: show calendar changes without applying them
-python fetch_edt.py --login                      :: log in once (same as login.bat, without the sync)
-python fetch_edt.py --show                       :: test a download in a visible window
+```powershell
+python main.py --watch --once                 # scan Downloads once, in the console (good first test)
+python main.py --pdf emploi.pdf               # process one PDF by hand
+python main.py --pdf emploi.pdf --dry-run --no-mail   # show calendar changes without applying them
+python main.py --pdf emploi.pdf --no-sync --no-mail   # just make out\EDT_4CCE5.ics
+python esprit_edt.py emploi.pdf               # print what the parser reads
 ```
 
 ## Files
 - `esprit_edt.py` – PDF parser + `.ics` export
-- `fetch_edt.py` – portal login + PDF download (Playwright)
 - `gcal_sync.py` – Google Calendar sync (add / update / remove, only its own events)
-- `main.py` – runs everything + sends the email (reads `.env`)
-- `login.bat` – log in to ESPRIT once (captcha), then sync
-- `run_edt.bat`, `install_task.ps1` – Windows scheduled task
-- `.github/workflows/weekly-edt.yml` – fallback: sync a PDF uploaded to `inbox/`
+- `main.py` – Downloads watcher, pipeline, email
+- `install_task.ps1` – starts the watcher hidden at every logon
+- `.github/workflows/weekly-edt.yml` – phone fallback: sync a PDF uploaded to `inbox/`

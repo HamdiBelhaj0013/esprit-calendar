@@ -1,6 +1,6 @@
-# The weekly download runs on your PC (ESPRIT's firewall blocks GitHub's servers).
-# This workflow is the fallback: upload a PDF into inbox/ (GitHub website or app → Add file → Upload)
-# and it syncs Google Calendar + emails you, without touching the ESPRIT portal.
+# Phone fallback (when your PC is off): upload the timetable PDF into inbox/
+# (GitHub website or app → Add file → Upload) and this syncs Google Calendar + emails you.
+# It never touches the ESPRIT portal.
 name: ESPRIT timetable → Google Calendar (inbox upload)
 
 on:
