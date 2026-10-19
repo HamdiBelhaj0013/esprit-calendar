@@ -15,6 +15,8 @@ SMTP_USER, SMTP_APP_PASSWORD, MAIL_TO (optional), DOWNLOADS_DIR (optional), PDF_
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import smtplib
@@ -135,19 +137,50 @@ def process(pdfs: list[Path], out: Path, sync=True, mail=True, dry_run=False):
 
 
 # ---------------------------------------------------------------- Downloads watcher
-def _archive(pdf: Path, weeks, failed=False) -> Path:
+PROCESSED = ARCHIVE / "processed.json"   # sha1 of every PDF already handled → never handled twice
+
+
+def _sha1(f: Path) -> str:
+    return hashlib.sha1(f.read_bytes()).hexdigest()
+
+
+def _load_processed() -> dict:
+    try:
+        return json.loads(PROCESSED.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _mark_processed(digest: str, archived_name: str):
+    data = _load_processed()
+    data[digest] = archived_name
     ARCHIVE.mkdir(exist_ok=True)
-    if failed or not weeks:
-        name = f"_not_a_timetable_{pdf.name}"
-    else:
-        name = f"EDT_{weeks[0].class_name}_{weeks[0].start:%Y-%m-%d}.pdf"
-    dest = ARCHIVE / name
-    n = 2
-    while dest.exists():
+    PROCESSED.write_text(json.dumps(data, indent=1), encoding="utf-8")
+
+
+def _try_remove(pdf: Path) -> bool:
+    try:
+        pdf.unlink()
+        return True
+    except OSError:
+        return False   # open in another program (Acrobat…) or protected folder → leave it, already handled
+
+
+def _archive(pdf: Path, digest: str, weeks, failed=False) -> str:
+    """Copy into archive/, remember it as handled, then try to remove it from Downloads."""
+    ARCHIVE.mkdir(exist_ok=True)
+    name = f"_not_a_timetable_{pdf.name}" if failed or not weeks else \
+        f"EDT_{weeks[0].class_name}_{weeks[0].start:%Y-%m-%d}.pdf"
+    dest, n = ARCHIVE / name, 2
+    while dest.exists() and _sha1(dest) != digest:
         dest = ARCHIVE / f"{Path(name).stem} ({n}).pdf"
         n += 1
-    shutil.move(str(pdf), str(dest))
-    return dest
+    if not dest.exists():
+        shutil.copy2(str(pdf), str(dest))
+    _mark_processed(digest, dest.name)
+    if not _try_remove(pdf):
+        return f"{dest.name} (the original stays in Downloads: it's open in another program or protected)"
+    return dest.name
 
 
 def _stable(f: Path) -> bool:
@@ -168,17 +201,28 @@ def scan(folder: Path, pattern: str, out: Path, max_age_days: int, retry_at: dic
             continue  # old download, leave it alone
         if retry_at.get(pdf, 0) > now or not _stable(pdf):
             continue
+        try:
+            digest = _sha1(pdf)
+        except OSError:
+            continue
+        if digest in _load_processed():
+            _try_remove(pdf)   # already handled earlier; clean up silently if it's no longer locked
+            continue
         print(f"\n[{datetime.now():%Y-%m-%d %H:%M:%S}] New file: {pdf.name}")
         try:
             weeks = process([pdf], out, sync=sync, mail=mail)
         except NotATimetable as e:
-            print(f"  skipped: {e} → {_archive(pdf, None, failed=True).name}")
+            print(f"  skipped: {e} → {_archive(pdf, digest, None, failed=True)}")
             continue
         except Exception as e:  # no internet, Google/Gmail error… → retry in 5 min
             print(f"  ERROR {type(e).__name__}: {e} — retrying in 5 min")
             retry_at[pdf] = now + 300
             continue
-        print(f"  archived as {_archive(pdf, weeks).name}")
+        try:
+            print(f"  archived as {_archive(pdf, digest, weeks)}")
+        except OSError as e:   # archiving must never cause a re-run (and a second email)
+            _mark_processed(digest, f"(not archived: {e})")
+            print(f"  done, but couldn't archive: {e}")
         retry_at.pop(pdf, None)
         done += 1
     return done
