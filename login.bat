@@ -5,7 +5,7 @@ cd /d "%~dp0"
 python fetch_edt.py --login
 if errorlevel 1 (
   echo.
-  echo Login failed - try again.
+  echo Login step failed - see the message above and the debug folder.
   pause
   exit /b 1
 )

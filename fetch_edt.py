@@ -35,6 +35,7 @@ SEL_PASS = os.getenv("SEL_PASS", 'input[type="password"]')
 SEL_PDF = os.getenv("SEL_PDF", 'button:has-text("charger PDF"), a:has-text("charger PDF")')
 SEL_NEXT = os.getenv("SEL_NEXT", ".fc-next-button")
 LOGIN_MARK = os.getenv("LOGIN_URL_MARK", "/auth/")   # login page URL: /auth/jwt/login?returnTo=...
+MENU_EDT = os.getenv("MENU_EDT", "Emploi Du Temps")   # side-menu entry that opens the timetable
 
 
 class SessionExpired(RuntimeError):
@@ -95,8 +96,41 @@ def _wait_logged_in_or_login(page, timeout_s: float = 25) -> str:
     return "timeout"
 
 
-def login(headless: bool = False, wait_s: int = 300) -> None:
-    """Open a browser window so YOU log in (captcha included). Saves the session for the weekly runs."""
+def _goto_timetable(page) -> str:
+    """Reach the timetable like a person would. Returns 'ok', 'login' or 'timeout'."""
+    state = _wait_logged_in_or_login(page, 6)
+    if state != "timeout":
+        return state
+    # Click "Emploi Du Temps" in the side menu (in-app navigation, no page reload)
+    try:
+        link = page.get_by_text(MENU_EDT, exact=False).first
+        if link.is_visible():
+            link.click()
+            state = _wait_logged_in_or_login(page, 20)
+            if state != "timeout":
+                return state
+    except Exception:
+        pass
+    # Last resort: load the URL directly
+    page.goto(EDT_URL, wait_until="domcontentloaded", timeout=60000)
+    _check_blocked(page)
+    return _wait_logged_in_or_login(page, 30)
+
+
+def _storage_summary(page, ctx) -> str:
+    """Where the site keeps its login (key names only, never values) — for troubleshooting."""
+    try:
+        ls = page.evaluate("() => Object.keys(localStorage)")
+        ss = page.evaluate("() => Object.keys(sessionStorage)")
+    except Exception:
+        ls, ss = [], []
+    cookies = sorted({c["name"] for c in ctx.cookies()})
+    return f"localStorage={ls} sessionStorage={ss} cookies={cookies}"
+
+
+def login(headless: bool = False, wait_s: int = 300) -> bool:
+    """Open a browser window so YOU log in (captcha included). Saves the session for the weekly runs.
+    Returns True if the saved session also works in a fresh background browser."""
     with sync_playwright() as p:
         ctx = _open_context(p, headless=headless)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
@@ -122,19 +156,48 @@ def login(headless: bool = False, wait_s: int = 300) -> None:
             ctx.close()
             raise RuntimeError("Login not completed in time — run login again.")
 
-        page.wait_for_timeout(1500)
-        if "/online/edt" not in page.url:
-            page.goto(EDT_URL, wait_until="domcontentloaded", timeout=60000)
-        state = _wait_logged_in_or_login(page, 30)
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except PWTimeout:
+            pass
+        state = _goto_timetable(page)
+        if state != "ok" and not headless:
+            print("➡  Open 'Emploi Du Temps' in the browser window (left menu). Waiting up to 3 min…")
+            end = time.time() + 180
+            while state != "ok" and time.time() < end:
+                state = _wait_logged_in_or_login(page, 2)
+                if state == "login":
+                    break
+        if state != "ok":
+            _debug(page, "login_after")
+            url = page.url
+            ctx.close()
+            raise RuntimeError(f"Logged in, but couldn't reach the timetable (page: {url}). "
+                               f"Send debug/login_after.png")
+
         try:
             ss = page.evaluate("() => Object.fromEntries(Object.entries(sessionStorage))")
             SESSION_STORAGE.write_text(json.dumps(ss), encoding="utf-8")
         except Exception:
             pass
+        print("   session info:", _storage_summary(page, ctx))
         ctx.close()
-    if state != "ok":
-        raise RuntimeError("Logged in, but the timetable page didn't show the PDF button. See debug/.")
-    print("✅ Session saved. The weekly run will reuse it.")
+
+        # Check right away that a fresh background browser is still logged in
+        ctx = _open_context(p, headless=True)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.goto(EDT_URL, wait_until="domcontentloaded", timeout=60000)
+        check = _goto_timetable(page)
+        if check != "ok":
+            _debug(page, "session_check")
+        ctx.close()
+
+    if check == "ok":
+        print("✅ Session saved and works in the background. The weekly run will reuse it.")
+        return True
+    print("⚠️  Logged in, but ESPRIT doesn't keep the session once the browser closes "
+          f"(background check: {check}). Send debug/session_check.png and the 'session info' line above.")
+    return False
 
 
 def _download(page, out: Path) -> Path:
@@ -164,7 +227,7 @@ def fetch_pdfs(out_dir: str | Path = "out", weeks: int = 1, today: date | None =
             page.goto(EDT_URL, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(1000)
             _check_blocked(page)
-            state = _wait_logged_in_or_login(page)
+            state = _goto_timetable(page)
             if state == "login":
                 raise SessionExpired("ESPRIT session expired — run login.bat (python fetch_edt.py --login)")
             if state != "ok":
@@ -208,7 +271,7 @@ if __name__ == "__main__":
 
     load_env()
     if "--login" in sys.argv:
-        login()
+        sys.exit(0 if login() else 3)
     else:
         nums = [int(a) for a in sys.argv[1:] if a.isdigit()]
         print(fetch_pdfs(HERE / "out", weeks=nums[0] if nums else 1,
